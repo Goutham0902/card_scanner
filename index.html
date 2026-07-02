@@ -1,0 +1,67 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Card Scanner</title>
+<link rel="stylesheet" href="style.css">
+<!-- Tesseract.js: the OCR engine. v5 uses a neural-network model (LSTM),
+     which reads real photos much better than older versions. -->
+<script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+</head>
+<body>
+
+  <header>
+    <h1>Card Scanner</h1>
+    <button id="settingsToggle">⚙</button>
+  </header>
+
+  <div id="settingsPanel" class="hidden">
+    <label for="sheetUrl">Google Sheet Web App URL</label>
+    <input id="sheetUrl" type="text" placeholder="https://script.google.com/macros/s/…/exec">
+    <button id="testConnBtn">Test connection</button>
+    <button id="saveUrlBtn">Save to link</button>
+  </div>
+
+  <div class="scan-stage">
+    <div class="viewport" id="viewport">
+      <div id="placeholder">Tap "Open Camera" to start</div>
+      <video id="video" playsinline autoplay muted class="hidden"></video>
+      <img id="captured" class="hidden">
+      <div class="guide hidden" id="guide"></div>
+    </div>
+
+    <button id="openCameraBtn">Open Camera</button>
+    <button id="captureBtn" class="hidden">Capture card</button>
+    <button id="retakeBtn" class="hidden">Retake</button>
+    <input type="file" id="fileInput" accept="image/*" class="hidden">
+    <button id="uploadBtn">Or upload a photo</button>
+
+    <div id="progressWrap" class="hidden">
+      <span id="progressLabel"></span> <span id="progressPct"></span>
+    </div>
+  </div>
+
+  <div class="result hidden" id="result">
+    <h2>Check before saving</h2>
+    <label>Name</label><input id="f_name">
+    <label>Title</label><input id="f_title">
+    <label>Company</label><input id="f_company">
+    <label>Phone</label><input id="f_phone">
+    <label>Phone 2</label><input id="f_phone2">
+    <label>Email</label><input id="f_email">
+    <label>Website</label><input id="f_website">
+    <label>Address</label><textarea id="f_address"></textarea>
+    <button id="saveRowBtn">Save to Sheet</button>
+    <button id="discardBtn">Discard</button>
+  </div>
+
+  <div class="history">
+    <h3>This session (<span id="histCount">0</span>)</h3>
+    <div id="historyList"></div>
+    <button id="exportCsvBtn" class="hidden">Export all as CSV</button>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
