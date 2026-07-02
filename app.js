@@ -119,7 +119,7 @@ function runOcr(dataUrl) {
     .then(w => w.recognize(dataUrl))
     .then(result => {
       $('progressWrap').classList.add('hidden');
-      populateResult(parseCardText(result.data.text));
+      populateResult(parseCardText(result.data));
     })
     .catch(err => {
       $('progressWrap').classList.add('hidden');
@@ -127,45 +127,100 @@ function runOcr(dataUrl) {
       console.error(err);
     });
 }
-function parseCardText(raw) {
-  const lines = raw.split('\n').map(l => l.trim()).filter(Boolean);
+function median(arr) {
+  if (!arr.length) return 0;
+  const s = [...arr].sort((a, b) => a - b);
+  const mid = Math.floor(s.length / 2);
+  return s.length % 2 ? s[mid] : (s[mid - 1] + s[mid]) / 2;
+}
+
+// Groups individual recognized words back into lines using their
+// vertical position, and records each line's text height — the key
+// piece of information plain text-splitting throws away.
+function buildLines(words) {
+  const items = (words || [])
+    .filter(w => w.text && w.text.trim())
+    .map(w => ({
+      text: w.text,
+      x0: w.bbox.x0,
+      height: w.bbox.y1 - w.bbox.y0,
+      yc: (w.bbox.y0 + w.bbox.y1) / 2
+    }))
+    .sort((a, b) => a.yc - b.yc);
+
+  const lineThreshold = (median(items.map(i => i.height)) || 20) * 0.6;
+  const lines = [];
+
+  items.forEach(w => {
+    let line = lines.find(l => Math.abs(l.yc - w.yc) < lineThreshold);
+    if (!line) { line = { yc: w.yc, words: [] }; lines.push(line); }
+    line.words.push(w);
+    line.yc = line.words.reduce((s, x) => s + x.yc, 0) / line.words.length;
+  });
+
+  lines.forEach(l => {
+    l.words.sort((a, b) => a.x0 - b.x0);
+    l.text = l.words.map(w => w.text).join(' ').trim();
+    l.height = median(l.words.map(w => w.height));
+  });
+
+  return lines.filter(l => l.text).sort((a, b) => a.yc - b.yc);
+}
+
+function parseCardText(data) {
+  const raw = data.text || '';
+  const lines = (data.words && data.words.length)
+    ? buildLines(data.words)
+    : raw.split('\n').map(t => t.trim()).filter(Boolean).map(t => ({ text: t, height: 0 }));
 
   const emailRe = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/;
   const phoneRe = /(\+?\d[\d\s\-().]{7,}\d)/g;
   const webRe = /((https?:\/\/)?(www\.)?[a-zA-Z0-9-]+\.(com|in|co|org|net|io)(\/\S*)?)/i;
   const titleKeywords = /(manager|director|founder|ceo|cto|cfo|president|engineer|consultant|executive|officer|analyst|designer|owner|partner|sales|marketing)/i;
   const companySuffix = /(pvt\.?\s*ltd|private limited|\bllc\b|\binc\.?\b|\bltd\b|limited|enterprises|solutions|technologies|group)/i;
+  // Looser than before: letters, spaces, apostrophes, periods, hyphens; 1–5 words
+  const nameLike = /^[A-Za-z][A-Za-z.'\-]*(\s+[A-Za-z][A-Za-z.'\-]*){0,4}$/;
 
-  let email = '', phones = [], website = '', name = '', title = '', company = '', addressLines = [];
-  const used = new Set(); // tracks which lines we've already claimed, so nothing gets double-counted
+  let email = '', phones = [], website = '', title = '', company = '', addressLines = [];
 
-  // Order matters: claim the most distinctive patterns first (email, then
-  // website, then phone) so later, looser guesses (like "this short line
-  // is probably the name") don't accidentally grab a line that's really a phone number.
-  lines.forEach((line, i) => { const m = line.match(emailRe); if (m && !email) { email = m[0]; used.add(i); } });
-  lines.forEach((line, i) => { if (used.has(i) || line.includes('@')) return; const m = line.match(webRe); if (m && !website) { website = m[0]; used.add(i); } });
-  lines.forEach((line, i) => {
-    if (used.has(i)) return;
-    const matches = line.match(phoneRe);
+  lines.forEach(l => { const m = l.text.match(emailRe); if (m && !email) { email = m[0]; l.used = true; } });
+  lines.forEach(l => { if (l.used || l.text.includes('@')) return; const m = l.text.match(webRe); if (m && !website) { website = m[0]; l.used = true; } });
+  lines.forEach(l => {
+    if (l.used) return;
+    const matches = l.text.match(phoneRe);
     if (matches) {
-      matches.forEach(p => { const digits = p.replace(/\D/g, ''); if (digits.length >= 7 && digits.length <= 15) phones.push(p.trim()); });
-      used.add(i);
+      matches.forEach(p => { const d = p.replace(/\D/g, ''); if (d.length >= 7 && d.length <= 15) phones.push(p.trim()); });
+      l.used = true;
     }
   });
-  lines.forEach((line, i) => { if (used.has(i)) return; if (companySuffix.test(line)) { if (!company) company = line; used.add(i); } });
-  lines.forEach((line, i) => { if (used.has(i)) return; if (titleKeywords.test(line)) { if (!title) title = line; used.add(i); } });
+  lines.forEach(l => { if (l.used) return; if (companySuffix.test(l.text)) { if (!company) company = l.text; l.used = true; } });
+  lines.forEach(l => { if (l.used) return; if (titleKeywords.test(l.text)) { if (!title) title = l.text; l.used = true; } });
 
-  // Name: the first remaining short, letters-only line
-  for (let i = 0; i < lines.length; i++) {
-    if (used.has(i)) continue;
-    if (lines[i].split(/\s+/).length <= 4 && /^[A-Za-z.'\s]+$/.test(lines[i])) { name = lines[i]; used.add(i); break; }
+  // Name = the tallest remaining line that looks name-shaped.
+  // Falls back to the tallest remaining short line at all if nothing matches perfectly.
+  let name = '';
+  const candidates = lines.filter(l => !l.used);
+  const nameShaped = candidates.filter(l => nameLike.test(l.text));
+  const pool = nameShaped.length ? nameShaped : candidates.filter(l => l.text.split(/\s+/).length <= 5);
+  if (pool.length) {
+    pool.sort((a, b) => b.height - a.height);
+    name = pool[0].text;
+    pool[0].used = true;
   }
-  // Company fallback: first unclaimed line, if the suffix check above found nothing
-  if (!company) { for (let i = 0; i < lines.length; i++) { if (!used.has(i)) { company = lines[i]; used.add(i); break; } } }
-  // Everything left over is probably the address
-  lines.forEach((line, i) => { if (!used.has(i)) addressLines.push(line); });
 
-  return { name, title, company, phone: phones[0] || '', phone2: phones[1] || '', email, website, address: addressLines.join(', '), raw };
+  if (!company) {
+    const rest = lines.find(l => !l.used);
+    if (rest) { company = rest.text; rest.used = true; }
+  }
+  lines.forEach(l => { if (!l.used) addressLines.push(l.text); });
+
+  return {
+    name, title, company,
+    phone: phones[0] || '', phone2: phones[1] || '',
+    email, website,
+    address: addressLines.join(', '),
+    raw
+  };
 }
 function populateResult(f) {
   $('f_name').value = f.name; $('f_title').value = f.title; $('f_company').value = f.company;
@@ -245,17 +300,6 @@ $('fileInput').onchange = (e) => {
   };
   reader.readAsDataURL(file);
 };
-function doPost(e) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  var data = JSON.parse(e.postData.contents);
-  sheet.appendRow([new Date(), data.name, data.title, data.company, data.phone, data.phone2, data.email, data.website, data.address]);
-  return ContentService.createTextOutput(JSON.stringify({status:'success'})).setMimeType(ContentService.MimeType.JSON);
-}
-
-function doGet(e) {
-  var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
-  return ContentService.createTextOutput(JSON.stringify({status:'ok', rows: sheet.getLastRow()})).setMimeType(ContentService.MimeType.JSON);
-}
 const params = new URLSearchParams(location.search);
 if (params.get('sheet')) $('sheetUrl').value = decodeURIComponent(params.get('sheet'));
 
