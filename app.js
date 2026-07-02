@@ -137,34 +137,62 @@ function median(arr) {
 // Groups individual recognized words back into lines using their
 // vertical position, and records each line's text height — the key
 // piece of information plain text-splitting throws away.
+function isJunkWord(w) {
+  const t = (w.text || '').trim();
+  if (!t) return true;
+  if (!/[A-Za-z0-9]/.test(t)) return true; // pure symbol — almost certainly a misread icon
+  if (t.length <= 2 && typeof w.confidence === 'number' && w.confidence < 45) return true;
+  return false;
+}
 function buildLines(words) {
   const items = (words || [])
-    .filter(w => w.text && w.text.trim())
+    .filter(w => w.text && w.text.trim() && !isJunkWord(w))
     .map(w => ({
       text: w.text,
       x0: w.bbox.x0,
+      x1: w.bbox.x1,
       height: w.bbox.y1 - w.bbox.y0,
       yc: (w.bbox.y0 + w.bbox.y1) / 2
     }))
     .sort((a, b) => a.yc - b.yc);
 
-  const lineThreshold = (median(items.map(i => i.height)) || 20) * 0.6;
-  const lines = [];
+  const medianHeight = median(items.map(i => i.height)) || 20;
+  const yThreshold = medianHeight * 0.6;
+  const gapThreshold = medianHeight * 3;
 
+  const bands = [];
   items.forEach(w => {
-    let line = lines.find(l => Math.abs(l.yc - w.yc) < lineThreshold);
-    if (!line) { line = { yc: w.yc, words: [] }; lines.push(line); }
-    line.words.push(w);
-    line.yc = line.words.reduce((s, x) => s + x.yc, 0) / line.words.length;
+    let band = bands.find(b => Math.abs(b.yc - w.yc) < yThreshold);
+    if (!band) { band = { yc: w.yc, words: [] }; bands.push(band); }
+    band.words.push(w);
+    band.yc = band.words.reduce((s, x) => s + x.yc, 0) / band.words.length;
   });
 
-  lines.forEach(l => {
-    l.words.sort((a, b) => a.x0 - b.x0);
-    l.text = l.words.map(w => w.text).join(' ').trim();
-    l.height = median(l.words.map(w => w.height));
+  const lines = [];
+  bands.forEach(band => {
+    const sorted = [...band.words].sort((a, b) => a.x0 - b.x0);
+    let current = [sorted[0]];
+    for (let i = 1; i < sorted.length; i++) {
+      const gap = sorted[i].x0 - current[current.length - 1].x1;
+      if (gap > gapThreshold) {
+        lines.push(current);
+        current = [sorted[i]];
+      } else {
+        current.push(sorted[i]);
+      }
+    }
+    lines.push(current);
   });
 
-  return lines.filter(l => l.text).sort((a, b) => a.yc - b.yc);
+  return lines
+    .map(wordsArr => ({
+      text: wordsArr.map(w => w.text).join(' ').trim(),
+      height: median(wordsArr.map(w => w.height)),
+      yc: wordsArr.reduce((s, w) => s + w.yc, 0) / wordsArr.length,
+      x0: wordsArr[0].x0
+    }))
+    .filter(l => l.text)
+    .sort((a, b) => a.yc - b.yc || a.x0 - b.x0);
 }
 
 function parseCardText(data) {
