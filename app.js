@@ -171,6 +171,7 @@ function populateResult(f) {
   $('f_name').value = f.name; $('f_title').value = f.title; $('f_company').value = f.company;
   $('f_phone').value = f.phone; $('f_phone2').value = f.phone2; $('f_email').value = f.email;
   $('f_website').value = f.website; $('f_address').value = f.address;
+  $('f_raw').value = f.raw;
   $('result').classList.remove('hidden');
 }
 
